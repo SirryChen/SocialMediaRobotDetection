@@ -20,22 +20,23 @@ class MyDataset(Dataset):
 
     def __getitem__(self, index):
         tweets = self.data['tweets'][index]
-        tweets = tweets[:self.max_tweet_count]
+        tweets = tweets[:self.max_tweet_count]      # 截取推文，最大推文数128
         tweets_cache = []
         words = []
+        # 将每个用户的所有推文串为一篇文章
         for tweet in tweets:
             words += tweet
-            cache = tweet[:self.max_tweet_length]
-            for _ in range(len(tweet), self.max_tweet_length):
+            cache = tweet[:self.max_tweet_length]                   # 将超出最大推文长度的部分截取丢弃
+            for _ in range(len(tweet), self.max_tweet_length):      # 将不足最大推文长度的部分补充为padding_value(词数-1)
                 cache.append(self.padding_value)
             tweets_cache.append(cache)
-        for _ in range(len(tweets), self.max_tweet_count):
+        for _ in range(len(tweets), self.max_tweet_count):          # 不足最大推文数的部分全文用padding_value补齐
             tweets_cache.append([self.padding_value] * self.max_tweet_length)
-        tweets = torch.tensor(tweets_cache, dtype=torch.long)
+        tweets = torch.tensor(tweets_cache, dtype=torch.long)       # 维度：max_tweet_count * max_tweet_length
         words_cache = words[:self.max_words]
         for _ in range(len(words), self.max_words):
             words_cache.append(self.padding_value)
-        words = torch.tensor(words_cache, dtype=torch.long)
+        words = torch.tensor(words_cache, dtype=torch.long)         # 维度：1 * max_words
         properties = torch.tensor(self.data['properties'][index], dtype=torch.float)
         neighbor_reps = torch.tensor(self.data['neighbor_reps'][index], dtype=torch.float)
         bot_labels = torch.tensor(self.data['bot_labels'][index], dtype=torch.long)
@@ -56,7 +57,7 @@ class MyDataset(Dataset):
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 parser = ArgumentParser()
-parser.add_argument('--dataset', type=str)
+parser.add_argument('--dataset', type=str, default='Twibot-20')
 parser.add_argument('--n_hidden', type=int, default=128)
 args = parser.parse_args()
 dataset_size = {
@@ -77,20 +78,25 @@ n_hidden = args.n_hidden
 idx = json.load(open('{}/idx.json'.format(path)))
 data = {
     'tweets': np.load('{}/tweets.npy'.format(path), allow_pickle=True),
-    'properties': np.load('{}/properties.npy'.format(path)),
+    # 'properties': np.load('{}/properties.npy'.format(path)),
     'neighbor_reps': np.zeros((dataset_size[dataset_name], n_hidden * 2)),
     'bot_labels': np.load('{}/bot_labels.npy'.format(path)),
     'follower_labels': np.load('{}/follower_labels.npy'.format(path)),
     'neighbors': np.load('{}/neighbors.npy'.format(path), allow_pickle=True)
 }
+followers_count_off = True
+if followers_count_off == True:             # FIXME add this to ignore followers_count
+    data['properties'] = np.load('{}/new_dataset/properties.npy'.format(path))
+else:
+    data['properties'] = np.load('{}/properties.npy'.format(path))
 
 word_vec = np.load('{}/vec.npy'.format(path))
 word_vec = torch.tensor(word_vec)
 words_size = len(word_vec)
 blank_vec = torch.zeros((1, word_vec.shape[-1]))
 word_vec = torch.cat((word_vec, blank_vec), dim=0)
-num_embeddings = word_vec.shape[0]
-embedding_dim = word_vec.shape[-1]
+num_embeddings = word_vec.shape[0]      # 总词数
+embedding_dim = word_vec.shape[-1]      # 词向量维度
 embedding_layer = nn.Embedding(num_embeddings, embedding_dim)
 embedding_layer.weight.data = word_vec
 embedding_layer.weight.requires_grad = False
@@ -101,9 +107,15 @@ if __name__ == '__main__':
     dataset = MyDataset(data, padding_value=num_embeddings - 1)
     print(len(dataset))
     loader = DataLoader(dataset, batch_size=32, shuffle=False)
-    model = SATAR(hidden_dim=n_hidden, embedding_dim=embedding_dim)
-    pretrain_weight = torch.load('{}/pretrain_weight.pt'.format(path), map_location='cpu')
-    model.load_state_dict(pretrain_weight)
+
+    if followers_count_off == True:                 # FIXME add this to ignore followers_count
+        model = SATAR(hidden_dim=n_hidden, embedding_dim=embedding_dim, property_dim=14)
+        pretrain_weight = torch.load('{}/new_dataset/pretrain_weight.pt'.format(path), map_location='cpu')
+    else:
+        model = SATAR(hidden_dim=n_hidden, embedding_dim=embedding_dim)
+        pretrain_weight = torch.load('{}/pretrain_weight.pt'.format(path), map_location='cpu')
+
+    model.load_state_dict(pretrain_weight)          # state_dict就是不带模型结构的模型参数
     model = model.to(device)
     reps = []
     with torch.no_grad():
@@ -115,8 +127,11 @@ if __name__ == '__main__':
                 'properties': batch['properties'].to(device)
             })
             reps.append(out.to('cpu').detach())
-    reps = torch.cat(reps, dim=0)
+    reps = torch.cat(reps, dim=0)       # 按列堆叠（原来列表中每一个元素为tensor向量，现整体转为tensor矩阵）
     reps = reps.numpy()
     print(reps.shape)
-    np.save('tmp/{}/reps.npy'.format(dataset_name), reps)
+    if followers_count_off == True:         # # FIXME add this to ignore followers_count
+        np.save('./preprocess/tmp/{}/new_dataset/reps.npy'.format(dataset_name), reps)
+    else:
+        np.save('./preprocess/tmp/{}/reps.npy'.format(dataset_name), reps)
 

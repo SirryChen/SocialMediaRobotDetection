@@ -6,14 +6,14 @@ import torch.nn.functional as func
 class Attention(nn.Module):
     def __init__(self, hidden_dim):
         super().__init__()
-        self.fc = nn.Linear(hidden_dim, hidden_dim)
+        self.fc = nn.Linear(hidden_dim, hidden_dim)                     # 全连接层 三维（batch_size,seq_length,inputdim）经过linear->（batch_size,seq_length,outputdim)
         self.weight_vector = nn.Parameter(torch.randn(hidden_dim, 1))
 
     def forward(self, x):
-        weight = torch.tanh(self.fc(x)).matmul(self.weight_vector)
-        weight = func.softmax(weight, dim=0)
-        result = x.mul(weight)
-        result = result.sum(dim=-2)
+        weight = torch.tanh(self.fc(x)).matmul(self.weight_vector)      # 计算注意力权重（batch_size,seq_length,hidden_dim)->(batch_size,seq_length,1)
+        weight = func.softmax(weight, dim=0)                            # softmax将权重归一化得注意力向量
+        result = x.mul(weight)                                          # 将LSTM输出与注意力向量相乘（batch_size,seq_length,hidden_dim)
+        result = result.sum(dim=-2)                                     # 相加得到加权LSTM输出（batch_size,hidden_dim)
         return result
 
 
@@ -26,20 +26,21 @@ class SemanticWord(nn.Module):
         self.lstm = nn.LSTM(input_size=in_dim,              # 输入数据的特征维数，也就是embedding_dim(词向量的维度)
                             hidden_size=self.hidden_dim,    # LSTM中的隐层维度
                             bidirectional=True,             # 利用双向LSTM
-                            batch_first=True)               # 通常输入数据shape=(batch_size,seq_length,embedding_dim),需先声明batch_size在前
+                            batch_first=True)               # 输入数据shape=(batch_size,seq_length,embedding_dim),需先声明batch_size在前
 
     def init_hidden(self, batch_size, device):
         return (
-            torch.FloatTensor(2, batch_size, self.hidden_dim).fill_(0).to(device),
-            torch.FloatTensor(2, batch_size, self.hidden_dim).fill_(0).to(device)
+            torch.FloatTensor(2, batch_size, self.hidden_dim).fill_(0).to(device),      # 初始隐藏状态h_0、细胞状态c_0全为0，
+            torch.FloatTensor(2, batch_size, self.hidden_dim).fill_(0).to(device)       # 维度：bidirection*batch_size*hidden_dim
         )
 
     def forward(self, texts):
         # texts = embedding_layer(texts)
-        batch_size, _, _ = texts.shape
+        batch_size, _, _ = texts.shape              # texts.shape = 文章数（即并行数），词数量，词向量长度
         hidden = self.init_hidden(batch_size, device=texts.device)
-        texts, _ = self.lstm(texts, hidden)         # texts:当前这个batch_size中每个句子的初始隐藏状态，hidden：当前batch_size中每个句子的初始细胞状态
-        return texts                                # texts包含的是句子的最后一个单词（也就是最后一个时间步）的隐藏状态
+        texts, _ = self.lstm(texts, hidden)         # texts:输入;   hidden：当前batch_size中每个句子的初始细胞状态、初始隐藏状态
+        return texts                                # texts包含的是每个词向量对应隐藏层的输出（在最后一个时间步）
+                                                    # 维度：batch_size,seq_length,2*hidden_size
 
 
 # 利用hierarchical RNNs 分析 tweet 层面的推文信息
@@ -81,10 +82,10 @@ class SemanticVector(nn.Module):
         self.dropout = nn.Dropout(p=dropout)
 
     def forward(self, user):
-        words = user['words']
-        words_rep = self.word_level_model(words)
-        words_rep = self.word_attn(words_rep)
-        words_rep = self.dropout(words_rep)
+        words = user['words']                       # 维度：batch_size,max_words,embedding_dim
+        temp_words_rep = self.word_level_model(words)    # 维度：batch_size,max_words,hidden_dim//2
+        words_rep = self.word_attn(temp_words_rep)       # 维度：batch_size,hidden_dim//2
+        words_rep = self.dropout(words_rep)         # 维度：batch_size,hidden_dim//2
         tweets = user['tweets']
         batch_size, _, _, _ = tweets.shape
         tweets_high_rep = []
@@ -99,7 +100,7 @@ class SemanticVector(nn.Module):
         tweets_high_rep = self.tweet_high_level_model(tweets_high_rep)
         tweets_rep = self.tweet_high_attn(tweets_high_rep)
         tweets_rep = self.dropout(tweets_rep)
-        return torch.cat([words_rep, tweets_rep], dim=1)    # 将word层面、tweet层面的向量连接起来
+        return torch.cat([words_rep, tweets_rep], dim=1)    # 将word层面、tweet层面的向量连接起来, 维度:batch_size*2*(hidden_size//2)
 
 
 class PropertyVector(nn.Module):
@@ -137,8 +138,8 @@ class CoInfluence(nn.Module):
         self.Wh = nn.Parameter(torch.randn(3 * hidden_dim, hidden_dim))
 
     def forward(self, user):
-        rs, rp, rn = user[0], user[1], user[2]
-        fsp = torch.tanh(torch.einsum('ij, ij -> i', rs.matmul(self.Wsp), rp))
+        rs, rp, rn = user[0], user[1], user[2]          # user[semantic_rep, property_rep, neighbors_rep]
+        fsp = torch.tanh(torch.einsum('ij, ij -> i', rs.matmul(self.Wsp), rp))      # three affinity indexes
         fpn = torch.tanh(torch.einsum('ij, ij -> i', rp.matmul(self.Wpn), rn))
         fns = torch.tanh(torch.einsum('ij, ij -> i', rn.matmul(self.Wns), rs))
         hs = torch.tanh(rs.matmul(self.Ws) +
@@ -150,15 +151,15 @@ class CoInfluence(nn.Module):
         hn = torch.tanh(rn.matmul(self.Wn) +
                         torch.einsum('i, ij -> ij', fpn, rp.matmul(self.Wp)) +
                         torch.einsum('i, ij -> ij', fns, rs.matmul(self.Ws)))
-        h = torch.cat([hs, hp, hn], dim=-1)
+        h = torch.cat([hs, hp, hn], dim=-1)         # 维度：batch_size * (hidden_dim*3)
         return torch.tanh(h.matmul(self.Wh))
 
 
 class SATAR(nn.Module):     # 继承nn.Module类
     def __init__(self, hidden_dim, embedding_dim, property_dim=15, dropout=0.5):
         super().__init__()
-        self.semantic_encoder = SemanticVector(hidden_dim=hidden_dim,
-                                               embedding_dim=embedding_dim,
+        self.semantic_encoder = SemanticVector(hidden_dim=hidden_dim,           # 隐藏层维度
+                                               embedding_dim=embedding_dim,     # 词向量维度，输入的维度
                                                dropout=dropout)
         self.property_encoder = PropertyVector(in_dim=property_dim,
                                                hidden_dim=hidden_dim,
@@ -204,7 +205,13 @@ if __name__ == '__main__':
         'words': torch.randn(32, 1024, 128).to(device),
         'tweets': torch.randn(32, 16, 128, 128).to(device),
         'properties': torch.randn(32, 15).to(device),
+        # 'neighbor_reps': torch.randn(32, 128 * 2).to(device)
         'neighbor_reps': torch.randn(32, 128 * 2).to(device)
     }
-    out = model(batch)
-    print(out.shape)
+    out = model(batch)      # 维度：batch_size * hidden_dim
+
+    classifier = FollowersClassifier(in_dim=128, out_dim=2).to(device)
+    result = classifier(out)
+    print(result)
+    print(result.shape)
+

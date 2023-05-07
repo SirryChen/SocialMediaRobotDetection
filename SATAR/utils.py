@@ -16,6 +16,8 @@ def null_metrics():
     }
 
 
+# 输入：真实标签，预测数值（维度：用户数量 * 2）
+# 输出：metrics:{七个指标}，plog:str(三个指标)
 def calc_metrics(y, pred):
     assert y.dim() == 1 and pred.dim() == 2
     if torch.any(torch.isnan(pred)):    # 有空值返回0
@@ -25,8 +27,8 @@ def calc_metrics(y, pred):
             plog += ' {}: {:.6}'.format(key, value)
         return metrics, plog
     pred = func.softmax(pred, dim=-1)           # 对每一行求softmax
-    pred_label = torch.argmax(pred, dim=-1)     # 返回每一行最大值的序号index
-    pred_score = pred[:, -1]
+    pred_label = torch.argmax(pred, dim=-1)     # 返回每一行最大值的序号index，即 第0列->0:bot,第1列->1:human
+    pred_score = pred[:, -1]                    # 取第二列
     y = y.to('cpu').numpy().tolist()
     pred_label = pred_label.to('cpu').tolist()
     pred_score = pred_score.to('cpu').tolist()
@@ -43,9 +45,10 @@ def calc_metrics(y, pred):
     plog = ''
     for key in ['acc', 'f1-score', 'mcc']:
         plog += ' {}: {:.6}'.format(key, metrics[key])
-    return metrics, plog
+    return metrics, plog    # metrics:{七个指标}，plog:str(三个指标)
 
 
+# 判断当前模型在训练集上的表现是否优于历史最佳
 def is_better(now, pre):
     if now['acc'] != pre['acc']:
         return now['acc'] > pre['acc']

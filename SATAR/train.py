@@ -2,6 +2,7 @@ from argparse import ArgumentParser
 from dataset import SATARDataset
 import numpy as np
 import time
+import os
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
@@ -11,14 +12,14 @@ from utils import null_metrics, calc_metrics, is_better
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 parser = ArgumentParser()
-parser.add_argument('--dataset', type=str)
+parser.add_argument('--dataset', type=str,default='Twibot-20')
 parser.add_argument('--max_epoch', type=int, default=64)
 parser.add_argument('--n_hidden', type=int, default=128)
 parser.add_argument('--n_batch', type=int, default=32)
 parser.add_argument('--lr', type=float, default=1e-4)
 parser.add_argument('--weight_decay', type=float, default=1e-5)
 parser.add_argument('--dropout', type=float, default=0.5)
-parser.add_argument('--mode', type=int, default=0)
+parser.add_argument('--mode', type=int, default=1)
 parser.add_argument('--max_tweet_count', type=int, default=128)
 parser.add_argument('--max_tweet_length', type=int, default=64)
 parser.add_argument('--max_words', type=int, default=1024)
@@ -27,7 +28,7 @@ args = parser.parse_args()
 dataset_name = args.dataset
 assert dataset_name in ['Twibot-22', 'Twibot-20', 'cresci-2015']
 # FIXME change the precessed_data path
-path = 'D:/SocialMediaRobots/TwiBot-22-master/src/SATAR/preprocess/tmp/{}'.format(dataset_name)
+path = './preprocess/tmp/{}'.format(dataset_name)
 
 mode = args.mode
 assert mode in [0, 1, 2]
@@ -54,6 +55,7 @@ data = {
     'bot_labels': np.load('{}/bot_labels.npy'.format(path)),
     'follower_labels': np.load('{}/follower_labels.npy'.format(path))
 }
+followers_count_off = True
 
 word_vec = np.load('{}/vec.npy'.format(path))
 word_vec = torch.tensor(word_vec)
@@ -175,6 +177,7 @@ if __name__ == '__main__':
     train_loader = DataLoader(train_set, batch_size=n_batch, shuffle=True)
     val_loader = DataLoader(val_set, batch_size=n_batch, shuffle=False)
     test_loader = DataLoader(test_set, batch_size=n_batch, shuffle=False)
+
     model = SATAR(hidden_dim=n_hidden, embedding_dim=embedding_dim, dropout=dropout)
     classifier = BotClassifier(in_dim=n_hidden, out_dim=2)
     if mode == 0:
@@ -183,7 +186,10 @@ if __name__ == '__main__':
                                      lr=lr,
                                      weight_decay=weight_decay)
     elif mode == 1:
-        pretrain_weight = torch.load('{}/pretrain_weight.pt'.format(path), map_location='cpu')
+        if followers_count_off == True:
+            pretrain_weight = torch.load('{}/new_dataset/pretrain_weight.pt'.format(path), map_location='cpu')
+        else:
+            pretrain_weight = torch.load('{}/pretrain_weight.pt'.format(path), map_location='cpu')
         model.load_state_dict(pretrain_weight)
         params = [
             {'params': classifier.parameters(), 'lr': lr},
@@ -193,7 +199,10 @@ if __name__ == '__main__':
                                      lr=lr,
                                      weight_decay=weight_decay)
     elif mode == 2:
-        pretrain_weight = torch.load('{}/pretrain_weight.pt'.format(path), map_location='cpu')
+        if followers_count_off == True:
+            pretrain_weight = torch.load('{}/new_dataset/pretrain_weight.pt'.format(path), map_location='cpu')
+        else:
+            pretrain_weight = torch.load('{}/pretrain_weight.pt'.format(path), map_location='cpu')
         model.load_state_dict(pretrain_weight)
         for param in model.parameters():
             param.requires_grad = False
@@ -208,7 +217,12 @@ if __name__ == '__main__':
     model.load_state_dict(best_state_dict['model'])
     classifier.load_state_dict(best_state_dict['classifier'])
     test_metrics = validation(max_epoch, 'test', test_loader)
-    torch.save(best_state_dict, 'tmp/checkpoints/{}_{}.pt'.format(dataset_name, test_metrics['acc']))
+    if not os.path.exists('./preprocess/tmp/checkpoints'):
+        os.mkdir('./preprocess/tmp/checkpoints')
+    if followers_count_off == True:
+        torch.save(best_state_dict, './preprocess/tmp/Twibot-20/new_dataset/{}_{}.pt'.format(dataset_name, test_metrics['acc']))
+    else:
+        torch.save(best_state_dict, './preprocess/tmp/checkpoints/{}_{}.pt'.format(dataset_name, test_metrics['acc']))
     for key, value in test_metrics.items():
         print(key, value)
 
